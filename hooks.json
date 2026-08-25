@@ -1,0 +1,43 @@
+{
+  "description": "Global context-aware architecture review and conclusion gate.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "^(startup|resume|clear|compact)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/review_gate_session_start.py\"",
+            "statusMessage": "Recording review-gate baseline",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/review_gate_subagent_stop.py\"",
+            "statusMessage": "Recording review or conclusion result",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/review_gate_stop.py\"",
+            "statusMessage": "Routing review and final conclusion",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}
