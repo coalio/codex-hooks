@@ -80,6 +80,21 @@ Validate the configuration formats:
 
 ## Policy notes
 
+The global guidance and reviewer profile enforce responsibility ownership as an
+architectural requirement. Keep one cohesive service for an owner, or group its
+independent capabilities under a common domain or provider namespace. A broad owner
+service alongside independently implemented feature services for that owner fails
+this rule. Review contracts and dependencies as well as names, including relevant
+existing siblings. Apply the same ownership rule to shared CI quality checks while
+preserving their coverage and strictness.
+
+The policy cites Microsoft's Architectural principles, Design for evolution,
+Identify microservice boundaries, and Use domain analysis to model microservices.
+The global guidance and reviewer profile include all four reference links and their
+applicable principles. Provider namespaces and shared CI configuration are local
+conventions derived from that guidance, not folder layouts prescribed by Microsoft.
+The reviewer receives the reference summaries directly and remains read-only.
+
 The installed policy deterministically exempts only the repository whose initial and current normalized canonical remote is `github.com/GreysteelCompany/salesforce`. Work outside Git and sessions with no net repository change also skip model review. Change `EXEMPT_REMOTE` in `hooks/review_gate_common.py` and the matching language in `AGENTS.md` and the classifier profile only if you intentionally want a different exemption.
 
 All three agents are read-only. The architecture reviewer may publish review comments only when the user explicitly authorizes that external write for an exact open pull request; the classifier and conclusion writer never publish.

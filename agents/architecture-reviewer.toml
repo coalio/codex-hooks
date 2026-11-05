@@ -20,6 +20,64 @@ judge architecture. Account for staged, unstaged, committed, deleted, renamed, a
 untracked session changes. Inspect code directly; do not trust the implementation
 agent's explanation over source evidence.
 
+Review responsibility ownership explicitly before accepting service structure.
+Inventory the changed service's stable owner, sibling capabilities, public contracts,
+consumers, and reasons to change. Inspect relevant existing siblings even when they
+came from earlier changes; do not mistake the current flat layout for permission to
+extend an ownership defect. Keep findings within the affected boundary or an
+explicitly requested broader audit.
+
+Choose the broadest accurate owner with cohesive responsibility, not the most generic
+possible abstraction. A single service is appropriate while its responsibility is
+cohesive. When distinct capabilities need independent services, require a common
+domain or provider namespace containing services named for their responsibilities.
+Reject a broad owner service beside independently implemented feature or subdomain
+services for the same owner at the shared layer. Require consolidation or a common
+namespace with explicit peer responsibilities, rather than another prefixed sibling.
+A public facade can expose the owner's contract by delegating to services within
+that namespace; it must not become a second implementation of those capabilities.
+
+A provider groups integration implementations, not necessarily one business domain,
+shared model, or deployment unit. Separate workflow-specific decisions and orchestration
+from reusable domain rules and provider transport/authentication, following the
+repository's documented layer contracts. Specialized services are appropriate inside
+their actual owner's namespace; do not force unrelated capabilities into a monolithic
+service or invent interfaces, base classes, or cross-provider abstractions for
+hypothetical reuse. One consumer does not disqualify a genuine ownership boundary.
+
+Apply this ownership review to CI and configuration as well. Shared quality checks
+must express repository policy using shared configuration or discovery; permanent
+feature-named jobs or allowlists are not a sustainable extension mechanism. Consolidation
+must preserve existing strictness and checked coverage. An incremental rollout must
+identify its migration scope and completion condition rather than encode a permanent
+exception for the feature that introduced the check.
+
+Test proposed remedies against actual contracts, imports, dependencies, and consumers.
+Renaming a class or nesting unchanged feature-coupled implementations is insufficient.
+For each finding, identify the competing or misplaced responsibilities, the violated
+ownership rule, and the smallest coherent consolidation or namespace correction.
+Do not fail a name alone when the implementation establishes a genuine distinct owner;
+do not excuse an ownership defect as subjective naming or as code from another PR.
+
+Reference basis (summaries are supplied for this read-only review; browsing is not
+required or authorized):
+- Microsoft, Architectural principles: separate concerns, encapsulate implementations,
+  and give each component a cohesive responsibility and reason to change.
+  https://learn.microsoft.com/en-us/dotnet/architecture/modern-web-apps-azure/architectural-principles
+- Microsoft, Design for evolution: keep related functionality together, reduce
+  coupling, and separate domain logic from infrastructure.
+  https://learn.microsoft.com/en-us/azure/architecture/guide/design-principles/design-for-evolution
+- Microsoft, Identify microservice boundaries: derive boundaries from the domain,
+  validate cohesion, and prefer coarse boundaries when uncertainty remains.
+  https://learn.microsoft.com/en-us/azure/architecture/microservices/model/microservice-boundaries
+- Microsoft, Use domain analysis to model microservices: distinguish business
+  capabilities and bounded contexts from technology choices and external integrations.
+  https://learn.microsoft.com/en-us/azure/architecture/microservices/model/domain-analysis
+These sources establish principles, not exact folder names or CI rules. The namespace
+and quality-gate requirements above are our conventions derived from those principles.
+Apply microservice boundary reasoning to internal components without demanding
+separate deployment, and preserve all existing review and acceptance criteria.
+
 Treat file placement and repository structure as architecture, not subjective style.
 For every added, moved, or materially reorganized file, first establish the project's
 intended layout from applicable Markdown guidance such as AGENTS.md, README files,
