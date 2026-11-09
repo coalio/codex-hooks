@@ -13,6 +13,8 @@ from urllib.parse import urlsplit
 
 from websockets.sync.client import connect, unix_connect
 
+from .state import process_identity
+
 
 class UsageError(RuntimeError):
     """A safe diagnostic that contains no provider response or credentials."""
@@ -20,6 +22,7 @@ class UsageError(RuntimeError):
 
 class RpcError(UsageError):
     def __init__(self, code, retry_after=0):
+        code = code if type(code) is int else "unknown"
         super().__init__(f"Codex request failed (code {code}); no reset success is assumed")
         self.code = code
         self.retry_after = retry_after
@@ -60,16 +63,9 @@ def reset_count(snapshot):
     return count
 
 
-def local_endpoints():
+def local_tcp_servers():
     """Discover only this user's Codex listeners, without reading process arguments."""
-    explicit = os.environ.get("CODEX_USAGE_ENDPOINT")
-    if explicit:
-        return [explicit]
-    root = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
-    endpoints = []
-    socket = root / "app-server-control/app-server-control.sock"
-    if socket.is_socket() and socket.stat().st_uid == os.getuid():
-        endpoints.append("unix://" + str(socket))
+    servers = {}
     result = subprocess.run(["ss", "-ltnpH"], capture_output=True, text=True, timeout=5, check=True)
     for line in result.stdout.splitlines():
         match = re.search(r'\("codex",pid=(\d+),', line)
@@ -82,7 +78,20 @@ def local_endpoints():
             continue
         address = line.split()[3]
         if address.startswith(("127.0.0.1:", "[::1]:")):
-            endpoints.append("ws://" + address)
+            servers["ws://" + address] = process_identity(int(match[1]))
+    return servers
+
+
+def local_endpoints():
+    explicit = os.environ.get("CODEX_USAGE_ENDPOINT")
+    if explicit:
+        return [explicit]
+    root = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+    endpoints = []
+    socket = root / "app-server-control/app-server-control.sock"
+    if socket.is_socket() and socket.stat().st_uid == os.getuid():
+        endpoints.append("unix://" + str(socket))
+    endpoints.extend(local_tcp_servers())
     return list(dict.fromkeys(endpoints))
 
 
@@ -160,6 +169,37 @@ class Client:
             raise UsageError("Thread status could not be verified")
         return status
 
+    def has_thread(self, thread_id):
+        cursor, seen = None, set()
+        while True:
+            page = self.call("thread/loaded/list", {"cursor": cursor, "limit": 100})
+            if thread_id in page.get("data", []):
+                return True
+            cursor = page.get("nextCursor")
+            if cursor is None:
+                return False
+            if cursor in seen:
+                raise UsageError("Thread inventory repeated a pagination cursor")
+            seen.add(cursor)
+
+
+def stopped_on_local_servers(thread_id):
+    # A dead original server is insufficient if another live server resumed the thread.
+    if os.environ.get("CODEX_USAGE_ENDPOINT"):
+        return False
+    endpoints = local_endpoints()
+    if not endpoints:
+        return False
+    for endpoint in endpoints:
+        client = Client(endpoint)
+        try:
+            client.open()
+            if client.has_thread(thread_id) and client.thread_state(thread_id) not in ("idle", "notLoaded"):
+                return False
+        finally:
+            client.close()
+    return True
+
 
 def find_client(thread_id):
     """Require a unique live owner rather than routing by the selected UI thread."""
@@ -168,14 +208,7 @@ def find_client(thread_id):
         client = Client(endpoint)
         try:
             client.open()
-            cursor, found = None, False
-            while True:
-                page = client.call("thread/loaded/list", {"cursor": cursor, "limit": 100})
-                found = found or thread_id in page.get("data", [])
-                cursor = page.get("nextCursor")
-                if found or cursor is None:
-                    break
-            if found:
+            if client.has_thread(thread_id):
                 matches.append(client)
             else:
                 client.close()
