@@ -32,9 +32,21 @@ def find_gate_evidence(
     if not root_transcript.is_file():
         return {}
 
-    # Inspect only sibling child rollouts from the same parent session.
+    # Sessions spanning midnight can write children into another date directory.
+    candidates = root_transcript.parent.glob("*.jsonl")
+    date_parts = root_transcript.parent.parts[-3:]
+    if (
+        len(root_transcript.parents) >= 4
+        and root_transcript.parents[3].name == "sessions"
+        and re.fullmatch(r"[0-9]{4}/[0-9]{2}/[0-9]{2}", "/".join(date_parts))
+    ):
+        candidates = root_transcript.parents[3].glob(
+            "[0-9][0-9][0-9][0-9]/[0-9][0-9]/[0-9][0-9]/*.jsonl"
+        )
+
+    # Identity, role, repository, and fingerprint checks still bind every child.
     evidence: dict[str, dict[str, str]] = {}
-    for candidate in root_transcript.parent.glob("*.jsonl"):
+    for candidate in candidates:
         if candidate.resolve() == root_transcript:
             continue
         parsed = _parse_candidate(

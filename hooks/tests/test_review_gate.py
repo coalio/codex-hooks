@@ -260,6 +260,71 @@ class ReviewGateHooksTest(unittest.TestCase):
         later = self._stop(transcript_path=str(root), turn_id="turn-later")
         self.assertIn("conclusion_writer", later.get("reason", ""))
 
+    def test_cross_day_child_conclusion_is_bound_once(self) -> None:
+        """A genuine child is discovered after day, month, and year rollovers."""
+
+        (self.repository / "code.py").write_text("changed\n", encoding="utf-8")
+        for before, after in (
+            ("2026/09/15", "2026/09/16"),
+            ("2026/09/30", "2026/10/01"),
+            ("2026/12/31", "2027/01/01"),
+        ):
+            with self.subTest(before=before, after=after):
+                self._review("PASS")
+                root = self._write_transcript(
+                    self.session_id, CONCLUSION_NAME, CONCLUSION,
+                    agent_id="conclusion-agent", turn_id="turn-child",
+                )
+                child = root.parent / f"child-{self.session_id}-{CONCLUSION_NAME}.jsonl"
+                sessions = self.repository / ".git" / before.replace("/", "-") / "sessions"
+                parent_dir, child_dir = sessions / before, sessions / after
+                parent_dir.mkdir(parents=True)
+                child_dir.mkdir(parents=True)
+                dated_root = parent_dir / root.name
+                root.rename(dated_root)
+                child.rename(child_dir / child.name)
+                self._conclude(CONCLUSION, turn_id="turn-child")
+                self.assertTrue(self._stop(
+                    transcript_path=str(dated_root), turn_id="turn-parent",
+                ).get("continue"))
+                self.assertIn("conclusion_writer", self._stop(
+                    transcript_path=str(dated_root), turn_id="turn-later",
+                ).get("reason", ""))
+
+    def test_cross_day_scan_rejects_untrusted_children(self) -> None:
+        """Wider discovery does not relax child identity or fingerprint checks."""
+
+        (self.repository / "code.py").write_text("changed\n", encoding="utf-8")
+        self._review("PASS")
+        for field, value in (
+            ("session_id", "another-session"),
+            ("parent_thread_id", "another-parent"),
+            ("agent_role", "worker"),
+            ("cwd", "/unrelated/repository"),
+            ("fingerprint", "0" * 64),
+        ):
+            with self.subTest(field=field):
+                root = self._write_transcript(self.session_id, CONCLUSION_NAME, CONCLUSION)
+                child = root.parent / f"child-{self.session_id}-{CONCLUSION_NAME}.jsonl"
+                records = [json.loads(line) for line in child.read_text().splitlines()]
+                if field == "fingerprint":
+                    records[1]["payload"]["output"]["text"] = (
+                        f"CODEX_REVIEW_GATE_FINGERPRINT={value}\n"
+                    )
+                else:
+                    records[0]["payload"][field] = value
+                child.write_text("".join(json.dumps(record) + "\n" for record in records))
+                sessions = self.repository / ".git" / field / "sessions"
+                parent_dir, child_dir = sessions / "2026/09/15", sessions / "2026/09/16"
+                parent_dir.mkdir(parents=True)
+                child_dir.mkdir(parents=True)
+                dated_root = parent_dir / root.name
+                root.rename(dated_root)
+                child.rename(child_dir / child.name)
+                self.assertIn("conclusion_writer", self._stop(
+                    transcript_path=str(dated_root), turn_id="turn-parent",
+                ).get("reason", ""))
+
     def test_malformed_conclusion_cannot_complete(self) -> None:
         """A status-only closeout must not satisfy the conclusion contract."""
 

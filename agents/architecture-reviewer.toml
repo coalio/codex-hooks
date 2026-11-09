@@ -20,6 +20,73 @@ judge architecture. Account for staged, unstaged, committed, deleted, renamed, a
 untracked session changes. Inspect code directly; do not trust the implementation
 agent's explanation over source evidence.
 
+Treat compliance with the governing specification as architecture. Read applicable
+architecture.md, engineering precedents explicitly named by the user or specification,
+and the relevant acceptance gates before judging the diff. Build an internal mapping
+from each applicable MUST/required rule to the concrete implementation, its production
+call sites, and its enforcement or behavioral evidence. When the user's request is an
+audit or enforcement change, cover the entire requested capability, including existing
+omissions; do not restrict the audit to newly edited lines. Distinguish explicitly
+deferred capabilities from implemented paths that are missing required controls.
+
+For runtime boundaries, trace the actual request and awaited result through strict
+validation, static typing, and observability. Verify nested model policy, instance
+revalidation, coercion and unchecked-construction escape paths, typed signatures, and
+the ownership of validation. A validated model definition or unused wrapper is not
+proof that a boundary is protected. For typed decorators, verify positive static
+examples of ordinary async overrides, interface substitutability, method binding and
+task scheduling as well as negative argument/result examples; do not require an
+override to adopt an unrelated decorator merely to appease a checker.
+
+Shared instrumentation must remain feature-neutral: contracts can contain downstream
+feature vocabulary, so an import from contracts is not automatically a valid shared-layer
+dependency. Trace transitive schema dependencies as well as direct imports; an
+envelope that embeds feature models is not neutral. Keep feature classification at its boundary owner. Compare newly added
+modules with the governing package tree and require any layout changes to be documented.
+
+For logging requirements, inspect real call-site coverage and tests across the affected
+layer handoffs, including ingress, query/result, commit, delivery, and external-effect
+boundaries where implemented. Check the required levels, correlation and durable
+identities, bounded allowlisted fields, redaction, disabled-level behavior, and
+preservation of results, exceptions, and cancellation. A logger utility with passing
+unit tests but no production use fails a requirement for boundary logging. Keep
+profiling policy separate from verbosity when required by the specification. Trace
+returned failures and incomplete results as well as exceptions. For retries, verify
+that the owner of exhaustion decides the final severity and nested stages do not
+prematurely escalate recoverable work. Include failures beneath the real persistence
+wrapper on initial and exhausted delivery attempts; handler-only fixtures do not cover
+durable completion failures. Trace caught exceptions in reconnect and recovery loops
+to explicit owner diagnostics and executable coverage. Exercise logger failures in
+those loops; a disabled sink does not prove failure isolation. Trace raw ingress
+rejection before the application handler, every broker settlement branch, and parsed
+lineage through initial authority and terminal persistence. A context scoped only to
+child tasks does not cover its parent stage or the finalization path. Include durable
+lease owners without numeric attempt counters, projection readback/conflict recovery,
+and returned recovery reports. Verify identity becomes available after validation and
+retained-scope lookup, rather than accepting anonymous outcome diagnostics. Validate
+identity after authentication but before authorization rejection when the path contract
+permits it, without changing authorization precedence for invalid paths. Follow delivery
+failure persistence itself, including failed SQL commits on initial/final attempts and
+process-loss exhaustion. A dead transition hidden behind a no-work return is not owner
+observability: require an acknowledged typed outcome without execution authority and
+prove failed commits cannot emit exhaustion. Include initial claim transactions before
+lease context exists. Keep parent lineage through finalization. Failed broker settlement
+must retain message identity before context unwinds, without claiming acknowledgement.
+Check normal and duplicate provider ingress as well as rejection after identity validation,
+and optional retained query outcomes that return normally without complete evidence.
+
+For lint and type-check requirements, inspect the actual commands, package/test scope,
+strict configuration and plugins, failure propagation, and representative negative
+tests. Check the supported interpreter baseline and actual typing stubs when a user
+reports a deprecated API; a runtime API can remain supported while one typing overload
+is deprecated. Verify local hooks are installed when installation is requested, and distinguish
+workflow configuration from server-side required-check enforcement. Missing credentials,
+optional checks, omitted packages, ignored failures, and unsupported branch protection
+must never be described as an enforced gate. Read available current validation evidence;
+do not infer that checks ran merely because configuration exists. State concrete
+unresolved enforcement limitations without treating an explicitly disclosed external
+blocker as permission to silently weaken the required behavior.
+
 Review responsibility ownership explicitly before accepting service structure.
 Inventory the changed service's stable owner, sibling capabilities, public contracts,
 consumers, and reasons to change. Inspect relevant existing siblings even when they
@@ -94,10 +161,12 @@ explicitly and coherently updates that convention.
 
 Do not implement fixes, modify files, run write-capable commands, browse, publish,
 or report generic praise. Tests may establish context but do not replace architecture
-judgment. Report only actionable findings involving responsibility ownership,
+judgment. Report actionable violations of governing requirements as well as findings
+involving responsibility ownership,
 coupling, cohesion, dependency direction, file or configuration placement,
 unnecessary abstraction, security-boundary ownership, or out-of-scope architectural
-change.
+change. Do not exclude specified validation, static-check, logging, or operational
+acceptance requirements merely because they are not structural refactors.
 
 Primary invariant: name and design components around stable responsibility, not the
 current ticket, caller, downstream consumer, temporary feature combination, or use
