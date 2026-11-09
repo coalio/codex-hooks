@@ -12,6 +12,7 @@ import time
 import uuid
 
 from .protocol import Client, UsageError, local_tcp_servers, remaining_usage, reset_count, stopped_on_local_servers
+from .lifecycle import event_for_hook
 from .state import process_alive, process_identity, stop_process, thread_key
 
 POLL_SECONDS = 60
@@ -187,6 +188,10 @@ class UsageService:
             self.store.write("hook", hook)
 
     def expire(self, reason="requested"):
+        # Revoke a waiting reset before contending for the operation lock.
+        hook = self.store.read("hook")
+        if hook and hook["thread_id"] == self.thread_id:
+            self.store.write("cancel-" + self.thread_id, {"hook_id": hook["id"], "event": "expire"})
         with self.store.guard():
             hook = self._owned()
             return self._finish(hook, reason) if hook else {"status": "expired", "reason": "no_hook"}
@@ -205,6 +210,14 @@ class UsageService:
             journal = {"key": str(uuid.uuid4()), "account": account, "status": "pending",
                        "hook_id": hook["id"] if hook else None}
             self.store.write("redemption", journal)
+        # A lifecycle event can arrive during the durable intent write.
+        if hook:
+            event = event_for_hook(self.store, hook)
+            if event.get("hook_id") == hook["id"] and event.get("event") in ("Interrupt", "SessionEnd", "expire"):
+                if not pending:
+                    journal.update(status="confirmed", outcome="cancelled")
+                    self.store.write("redemption", journal)
+                return "cancelled"
         try:
             outcome = self.client.call("account/rateLimitResetCredit/consume", {
                 "idempotencyKey": journal["key"]}).get("outcome")
@@ -233,6 +246,8 @@ class UsageService:
             if hook and self._account(snapshot) != hook["account"]:
                 raise UsageError("The account changed; reset automation is suspended")
             outcome = self._consume(snapshot, hook)
+            if outcome == "cancelled":
+                return {"outcome": outcome, "hook": self._finish(hook, "session_stopped")}
             try:
                 refreshed = self._snapshot(after_reset=True)
                 if hook:
@@ -280,15 +295,17 @@ class UsageService:
                 if not low:
                     return self._public(hook)
             # Recheck lifecycle and thread state after the upstream read and before any write.
-            event = self.store.read("event-" + self.thread_id) or {}
+            event = event_for_hook(self.store, hook)
             if event.get("hook_id") == hook["id"] and event.get("event") in ("Interrupt", "SessionEnd", "expire"):
                 return self._finish(hook, "session_stopped")
             if not hook["keep_running"] and self.client.thread_state(self.thread_id) != "active":
                 return self._public(hook)
-            event = self.store.read("event-" + self.thread_id) or {}
+            event = event_for_hook(self.store, hook)
             if event.get("hook_id") == hook["id"] and event.get("event") in ("Interrupt", "SessionEnd", "expire"):
                 return self._finish(hook, "session_stopped")
             outcome = self._consume(snapshot, hook)
+            if outcome == "cancelled":
+                return self._finish(hook, "session_stopped")
             if outcome == "noCredit":
                 return self._finish(hook, "no_resets")
             try:

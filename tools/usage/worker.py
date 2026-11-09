@@ -13,6 +13,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from tools.usage.protocol import Client
+from tools.usage.lifecycle import event_for_hook
 from tools.usage.service import PollDeferred, UsageService
 from tools.usage.state import Store
 
@@ -51,7 +52,7 @@ def run(hook_id, store=None):
             hook = store.read("hook")
             if not hook or hook["id"] != hook_id:
                 return
-            event = store.read("event-" + hook["thread_id"]) or {}
+            event = event_for_hook(store, hook)
             immediate = ("session_stopped" if event.get("hook_id") == hook_id and
                          event.get("event") in ("Interrupt", "SessionEnd", "expire") else None)
             if immediate:

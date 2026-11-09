@@ -1,5 +1,19 @@
 # Global Codex Guidance
 
+## Usage tool
+
+The `codex_usage` MCP server exposes the `usage` tool, its setup and JSON contract
+are documented in `tools/usage/README.md`
+
+Before enabling `use_reset_automatically`, tell the user that lifecycle cleanup
+will stop the hook once work is complete, `keep_running` may be set only when
+the user explicitly requests continuation, interruption and session end still
+expire it
+
+The worker owns polling and reset decisions, agents should not poll in a loop,
+the originating `CODEX_THREAD_ID` supplies `thread_id`, never the selected UI
+conversation, explicit `expire_hooks` applies to the caller's hook
+
 ## Context-aware architecture review gate
 
 Do not proactively spawn an architecture gate agent after repository work. The global

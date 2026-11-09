@@ -3,6 +3,7 @@ import unittest
 
 from tools.usage.worker import Lifecycle
 from tools.usage.state import Store
+from tools.usage.lifecycle import event_for_hook, record_event
 
 
 class LifecycleTests(unittest.TestCase):
@@ -33,6 +34,14 @@ class LifecycleTests(unittest.TestCase):
         self.assertIsNone(self.lifecycle.check(self.hook, {}, "idle", 1))
         self.assertIsNone(self.lifecycle.check(self.hook, {}, None, 30))
         self.assertIsNone(self.lifecycle.check(self.hook, {}, "idle", 31))
+
+    def test_stop_signal_cannot_overwrite_interrupt_revocation(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = Store(root)
+            store.write("hook", self.hook)
+            for event in ("Interrupt", "Stop"):
+                record_event({"hook_event_name": event, "session_id": "thread-a"}, store)
+            self.assertEqual(event_for_hook(store, self.hook)["event"], "Interrupt")
 
 
 if __name__ == "__main__":
