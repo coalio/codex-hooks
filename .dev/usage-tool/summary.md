@@ -40,14 +40,16 @@ git diff --check
 
 A live read through the owning server confirmed a weekly quota and zero available resets, no real reset was redeemed and no live automatic reset worker was enabled
 
-The installer backs up replaced files and merges the new MCP registration and lifecycle handlers while retaining unrelated configuration, global installation and its final readback are pending at this checkpoint
+Global installation completed through `./install.sh --usage-only`, all nine installed Python files match their source, the installed MCP handshake, discovery, and both live read actions passed, the final read returned 43% remaining and zero resets
+
+The replaced configuration was backed up, comparison against that backup confirms unrelated configuration and all existing review handlers were preserved, the new Stop, Interrupt, and SessionEnd handlers are enabled in configuration but Codex currently reports their trust status as untrusted
 
 ## Commits and remaining work
 
 - `ef9cfd2`, account quota reads and local server discovery
 - `5602829`, session ownership, background policy, reset journal, and lifecycle processing
-- The remaining source changes add the MCP entry point, installation, lifecycle registration, documentation, and process-level validation
+- `168c939`, MCP entry point, installation, lifecycle registration, documentation, and process-level validation
 
-The final installed readback and lifecycle trust status remain to be recorded, no GitHub push, release, or external communication is part of this request, no Asana time was logged because this work was explicitly approved without an Asana task
+Approval of the three exact lifecycle definitions remains pending, the existing session retains its prior tool configuration and a fresh session can load the new MCP server, no GitHub push, release, or external communication is part of this request, no Asana time was logged because this work was explicitly approved without an Asana task
 
 The implementation follows the current [Codex app-server contract](https://learn.chatgpt.com/docs/app-server) and [lifecycle hook contract](https://learn.chatgpt.com/docs/hooks), with the [pinned WebSocket client API](https://websockets.readthedocs.io/en/15.0.1/reference/sync/client.html)
