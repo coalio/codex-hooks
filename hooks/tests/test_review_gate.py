@@ -22,7 +22,7 @@ sys.path.insert(0, str(HOOK_DIRECTORY))
 
 from review_gate_common import (  # noqa: E402
     CLASSIFIER_NAME, CONCLUSION_NAME, REVIEWER_NAME, load_session_state,
-    normalize_remote, repository_fingerprint,
+    normalize_remote, repository_fingerprint, session_state_path,
 )
 
 
@@ -94,11 +94,116 @@ class ReviewGateHooksTest(unittest.TestCase):
         self.assertTrue(response.get("continue"))
 
         self._git("remote", "set-url", "origin", "https://github.com/example/other.git")
-        response = self._run_hook(
-            LEGACY_STOP, self._payload("Stop", session="legacy-session"),
-        )
+        for active in (False, True):
+            with self.subTest(stop_hook_active=active):
+                response = self._run_hook(
+                    LEGACY_STOP, self._payload("Stop", session="legacy-session", stop_hook_active=active),
+                )
+                self._assert_terminal_stop(response)
+                self.assertIn("fresh Codex session", response["stopReason"])
+
+    def test_missing_baseline_stops_without_creating_state(self) -> None:
+        """Clean, dirty, and committed work cannot cause an unrecoverable retry loop."""
+
+        # A clean worktree does not prove that an unrecorded session made no commits.
+        session = "session-without-baseline"
+        for condition in ("clean", "dirty", "committed"):
+            if condition == "dirty":
+                (self.repository / "tracked.txt").write_text("changed\n", encoding="utf-8")
+            elif condition == "committed":
+                self._git("commit", "-qam", "test: commit without session baseline")
+            fingerprint = repository_fingerprint(self.repository)
+            for active in (False, True):
+                with self.subTest(condition=condition, stop_hook_active=active):
+                    response = self._stop(session, stop_hook_active=active)
+                    self._assert_terminal_stop(response)
+                    self.assertIn("baseline is missing", response["stopReason"])
+                    self.assertIsNone(load_session_state(self.repository, session))
+                    self.assertEqual(repository_fingerprint(self.repository), fingerprint)
+
+    def test_corrupt_state_stops_without_replacing_it(self) -> None:
+        """Unreadable state remains available for diagnosis and never becomes approval."""
+
+        path = session_state_path(self.repository, self.session_id)
+        path.write_text("{broken", encoding="utf-8")
+        for active in (False, True):
+            with self.subTest(stop_hook_active=active):
+                self._assert_terminal_stop(self._stop(stop_hook_active=active))
+                self.assertEqual(path.read_text(encoding="utf-8"), "{broken")
+
+    def test_invalid_baseline_stops_without_replacing_it(self) -> None:
+        """A structurally invalid baseline cannot be reset from current work."""
+
+        path = session_state_path(self.repository, self.session_id)
+        state = json.loads(path.read_text(encoding="utf-8"))
+        state["baseline"]["fingerprint"] = "invalid"
+        path.write_text(json.dumps(state), encoding="utf-8")
+        before = path.read_bytes()
+        for active in (False, True):
+            with self.subTest(stop_hook_active=active):
+                self._assert_terminal_stop(self._stop(stop_hook_active=active))
+                self.assertEqual(path.read_bytes(), before)
+
+    def test_old_baseline_stops_when_exact_delta_is_unavailable(self) -> None:
+        """Older state cannot attribute changed dirty files to this session."""
+
+        path = session_state_path(self.repository, self.session_id)
+        state = json.loads(path.read_text(encoding="utf-8"))
+        del state["baseline"]["dirty_snapshots"]
+        path.write_text(json.dumps(state), encoding="utf-8")
+        before = path.read_bytes()
+        (self.repository / "tracked.txt").write_text("changed\n", encoding="utf-8")
+        for active in (False, True):
+            with self.subTest(stop_hook_active=active):
+                self._assert_terminal_stop(self._stop(stop_hook_active=active))
+                self.assertEqual(path.read_bytes(), before)
+
+    def test_missing_protected_baseline_stops_without_approval(self) -> None:
+        """Lost dirty-path content cannot be reconstructed by another continuation."""
+
+        (self.repository / "tracked.txt").write_text("preexisting\n", encoding="utf-8")
+        session = "session-lost-snapshot"
+        self._start(session)
+        state = load_session_state(self.repository, session)
+        snapshot = Path(state["baseline"]["dirty_snapshots"]["tracked.txt"]["content_file"])
+        snapshot.unlink()
+        (self.repository / "tracked.txt").write_text("session change\n", encoding="utf-8")
+        before = session_state_path(self.repository, session).read_bytes()
+        for active in (False, True):
+            with self.subTest(stop_hook_active=active):
+                self._assert_terminal_stop(self._stop(session, stop_hook_active=active))
+                self.assertEqual(session_state_path(self.repository, session).read_bytes(), before)
+
+    def test_invalid_stop_input_ends_both_entrypoints_without_continuation(self) -> None:
+        """Malformed hook input must fail visibly without asking the model to repair it."""
+
+        for script in (STOP, LEGACY_STOP):
+            with self.subTest(script=script.name):
+                self._assert_terminal_stop(self._run_hook(script, {"hook_event_name": "invalid"}))
+
+    def test_valid_review_continuations_still_require_approval(self) -> None:
+        """The loop fix must leave actionable reviewer and conclusion routing intact."""
+
+        (self.repository / "code.py").write_text("changed\n", encoding="utf-8")
+        response = self._stop(stop_hook_active=True)
         self.assertEqual(response.get("decision"), "block")
-        self.assertIn("fresh Codex session", response.get("reason", ""))
+        self.assertIn("architecture_reviewer", response["reason"])
+        self.assertNotIn("continue", response)
+
+        # A real review failure remains actionable even in a continued turn.
+        self._review("FAIL\n\n[high] code.py:1\ninvariant: ownership\nproblem: mixed roles\nminimal correction: split roles")
+        response = self._stop(stop_hook_active=True)
+        self.assertEqual(response.get("decision"), "block")
+        self.assertIn("returned FAIL", response["reason"])
+        self.assertNotIn("continue", response)
+
+        # Valid approval still needs a current conclusion before completion.
+        self._review("PASS")
+        response = self._stop(stop_hook_active=True)
+        self.assertEqual(response.get("decision"), "block")
+        self.assertIn("conclusion_writer", response["reason"])
+        self._conclude(CONCLUSION)
+        self.assertTrue(self._stop(stop_hook_active=True).get("continue"))
 
     def test_unchanged_repository_allows_stop(self) -> None:
         """The initial fingerprint is an unconditional zero-token acceptance."""
@@ -606,9 +711,19 @@ class ReviewGateHooksTest(unittest.TestCase):
     def _stop(self, session: str | None = None, **values: object) -> dict[str, object]:
         """Run Stop for one test session."""
 
+        values.setdefault("stop_hook_active", False)
         return self._run_hook(
-            STOP, self._payload("Stop", session, stop_hook_active=False, **values),
+            STOP, self._payload("Stop", session, **values),
         )
+
+    def _assert_terminal_stop(self, response: dict[str, object]) -> None:
+        """The Codex wire response must end the turn and expose incomplete review."""
+
+        self.assertIs(response.get("continue"), False)
+        self.assertNotIn("decision", response)
+        self.assertNotIn("reason", response)
+        self.assertIn("without approval", response.get("stopReason", ""))
+        self.assertEqual(response.get("systemMessage"), response["stopReason"])
 
     def _classify(self, message: str, session: str | None = None) -> None:
         """Run the dedicated classifier completion hook."""

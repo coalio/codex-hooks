@@ -9,6 +9,7 @@ from review_gate_common import (
     canonical_remote,
     hook_repository,
     read_hook_input,
+    stop_without_approval,
     write_hook_output,
 )
 
@@ -24,15 +25,8 @@ def main() -> None:
         return
 
     # A legacy session has no trustworthy generic baseline, so require a fresh session.
-    write_hook_output(
-        {
-            "decision": "block",
-            "reason": (
-                "This session started before the context-aware review gate was activated. "
-                "Start a fresh Codex session so review_gate_session_start.py can record "
-                "a trustworthy baseline and route the current repository state."
-            ),
-        }
+    stop_without_approval(
+        "This session started before the context-aware review gate was activated.",
     )
 
 
@@ -40,9 +34,4 @@ if __name__ == "__main__":
     try:
         main()
     except ReviewGateError as exc:
-        write_hook_output(
-            {
-                "decision": "block",
-                "reason": f"Legacy Stop compatibility failed closed: {exc}",
-            }
-        )
+        stop_without_approval(f"Legacy Stop compatibility failed closed: {exc}.")

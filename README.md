@@ -7,6 +7,7 @@ A global, context-aware review gate for Codex. It fingerprints the exact Git sta
 ```text
 SessionStart -> record immutable repository baseline
      Stop -> unchanged or outside Git ----------------------> finish
+          -> missing or unusable baseline ------------------> stop with warning, review incomplete
           -> exact Salesforce remote exemption -------------> conclusion_writer -> finish
           -> obvious engineering change -> architecture_reviewer -> conclusion_writer -> finish
           -> ambiguous/non-engineering change -> architecture_scope_classifier
@@ -17,6 +18,17 @@ SessionStart -> record immutable repository baseline
 The fingerprint covers HEAD, the index, tracked worktree changes, non-ignored untracked files, and initialized submodules. For files already dirty when a session starts, the gate stores protected baseline material under the worktree's Git directory and generates a session-only delta artifact so reviewers do not attribute earlier work to the current session.
 
 `SubagentStop` records only strict outputs from the three configured roles. `Stop` also has transcript-evidence recovery for compatible Codex child rollouts. Any edit after classification, review, or conclusion changes the fingerprint and invalidates that evidence.
+
+When the baseline is missing, too old to reconstruct the changed files, or
+unreadable, the hook ends the turn with a visible warning and leaves review
+incomplete. The same behavior applies when protected baseline content is lost or
+a legacy Stop command has no trustworthy baseline. Existing evidence stays intact,
+and a fresh session is needed after any state errors are corrected, with existing
+changes still requiring review.
+
+These failures use `continue: false`, `stopReason`, and `systemMessage`, following
+the [Codex Stop hook contract](https://learn.chatgpt.com/docs/hooks#stop).
+Actionable review and conclusion requests continue to use `decision: "block"`.
 
 ## Included files
 
