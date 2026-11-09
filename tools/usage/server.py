@@ -26,10 +26,12 @@ SCHEMA = {
         "thread_id": {"type": "string", "description": "The originating CODEX_THREAD_ID, required when the server has no thread-scoped environment"},
         "keep_running": {"type": "boolean", "description": "Only true when the user explicitly requests continuation after work completes, default false for a new hook"},
     },
-    "anyOf": [{"required": ["action"]}, {"required": ["hook"]}],
+    "minProperties": 1,
 }
 TOOL = {"name": "usage", "inputSchema": SCHEMA, "description": (
     "Read remaining Codex usage or earned resets, redeem a reset, or manage one session-owned automatic reset worker. "
+    "Provide action (read_remaining_percent, read_remaining_resets, use_reset, expire_hooks) or "
+    "hook (use_reset_automatically), at least one is required and validated before any operation. "
     "Read CODEX_THREAD_ID from the shell and supply thread_id, never infer it from the selected UI session. "
     "The worker checks at most once per 60 seconds, with shared caching and backoff, and redeems at <=1% remaining. "
     "Before enabling it, explicitly tell the user that Codex lifecycle cleanup stops it when work completes. "

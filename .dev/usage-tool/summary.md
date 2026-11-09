@@ -28,6 +28,8 @@ During self-review, an idle timer was found to be reset by the preliminary event
 
 Cancellation, uncertain responses, and unchanged depleted readbacks were checked at the redemption boundary, pending attempts retain their key, counts commit with a receipt, and another automatic reset requires observed quota recovery
 
+The native tool's schema renderer initially reduced the root `anyOf` contract to generic argument objects, the schema now exposes the five optional fields directly while runtime validation enforces the required action-or-hook rule before any operation
+
 ## Validation
 
 The usage suite passes 36 tests, including real MCP and worker subprocesses against a local fake Codex server, the existing review-hook suite passes 46 tests
@@ -42,7 +44,11 @@ A live read through the owning server confirmed a weekly quota and zero availabl
 
 Global installation completed through `./install.sh --usage-only`, all nine installed Python files match their source, the installed MCP handshake, discovery, and both live read actions passed, the final read returned 43% remaining and zero resets
 
-The replaced configuration was backed up, comparison against that backup confirms unrelated configuration and all existing review handlers were preserved, the new Stop, Interrupt, and SessionEnd handlers are enabled in configuration but Codex currently reports their trust status as untrusted
+The replaced configuration was backed up, comparison against that backup confirms unrelated configuration and all existing review handlers were preserved
+
+After explicit user approval, the three exact cleanup definitions were trusted through Codex's configuration API, live readback reports each definition as trusted and enabled for both configuration discovery and this loaded thread, previous trust entries and unrelated settings were preserved
+
+The configuration reload also exposed the native `usage` MCP tool in the current session, both native read actions passed with 42% remaining and zero resets, no restart was required
 
 ## Commits and remaining work
 
@@ -50,6 +56,6 @@ The replaced configuration was backed up, comparison against that backup confirm
 - `5602829`, session ownership, background policy, reset journal, and lifecycle processing
 - `168c939`, MCP entry point, installation, lifecycle registration, documentation, and process-level validation
 
-Approval of the three exact lifecycle definitions remains pending, the existing session retains its prior tool configuration and a fresh session can load the new MCP server, no GitHub push, release, or external communication is part of this request, no Asana time was logged because this work was explicitly approved without an Asana task
+No operator activation remains pending, Codex's native MCP inventory confirms the refreshed five-field schema and a native call passed after reload, no GitHub push, release, or external communication is part of this request, no Asana time was logged because this work was explicitly approved without an Asana task
 
 The implementation follows the current [Codex app-server contract](https://learn.chatgpt.com/docs/app-server) and [lifecycle hook contract](https://learn.chatgpt.com/docs/hooks), with the [pinned WebSocket client API](https://websockets.readthedocs.io/en/15.0.1/reference/sync/client.html)

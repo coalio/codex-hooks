@@ -82,7 +82,7 @@ def install(destination, dependencies=True):
         atomic_write(destination / name, content)
     for name in ("config.toml", "hooks.json"):
         atomic_write(destination / name, files[name])
-    return {"installed": True, "backup_created": backup.exists(), "hook_trust_required": True,
+    return {"installed": True, "backup_created": backup.exists(), "hook_trust_check": "hooks/list",
             "mcp_server": "codex_usage"}
 
 
