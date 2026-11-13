@@ -8,6 +8,8 @@ import re
 from pathlib import Path
 from typing import Any, Iterator
 
+from review_gate_contracts import CONTRACT_REVIEWER_NAME, parse_contract_review
+
 from review_gate_common import (
     CLASSIFIER_NAME, CONCLUSION_NAME, REVIEWER_NAME, ReviewGateError,
     is_valid_conclusion, is_valid_review_result, parse_classifier_result,
@@ -102,7 +104,9 @@ def _parse_candidate(
         raise ReviewGateError(f"cannot inspect gate-agent transcript: {exc}") from exc
 
     # Require a strict role-specific verdict bound to the current fingerprint.
-    if role == REVIEWER_NAME:
+    if role == CONTRACT_REVIEWER_NAME:
+        valid_message = parse_contract_review(latest_message) is not None
+    elif role == REVIEWER_NAME:
         valid_message = is_valid_review_result(latest_message)
     elif role == CLASSIFIER_NAME:
         valid_message = parse_classifier_result(latest_message) is not None
@@ -133,7 +137,7 @@ def _expected_role(metadata: Any, parent_session_id: str, repository: Path) -> s
     role = metadata.get("agent_role")
     cwd = metadata.get("cwd")
     if (
-        role not in {CLASSIFIER_NAME, REVIEWER_NAME, CONCLUSION_NAME}
+        role not in {CLASSIFIER_NAME, REVIEWER_NAME, CONTRACT_REVIEWER_NAME, CONCLUSION_NAME}
         or metadata.get("session_id") != parent_session_id
         or metadata.get("parent_thread_id") != parent_session_id
         or not isinstance(cwd, str)

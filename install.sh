@@ -24,15 +24,18 @@ files='
 AGENTS.md
 hooks.json
 agents/architecture-reviewer.toml
+agents/service-contract-reviewer.toml
 agents/architecture-scope-classifier.toml
 agents/conclusion-writer.toml
 hooks/architecture_review_stop.py
 hooks/review_gate_common.py
+hooks/review_gate_contracts.py
 hooks/review_gate_evidence.py
 hooks/review_gate_fingerprint.py
 hooks/review_gate_session_start.py
 hooks/review_gate_stop.py
 hooks/review_gate_subagent_stop.py
+hooks/review_gate_structure.py
 '
 
 # Refuse before mutation when an existing installation would be overwritten implicitly.

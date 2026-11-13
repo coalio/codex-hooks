@@ -24,6 +24,7 @@ from review_gate_common import (  # noqa: E402
     CLASSIFIER_NAME, CONCLUSION_NAME, REVIEWER_NAME, load_session_state,
     normalize_remote, repository_fingerprint, session_state_path,
 )
+from review_gate_contracts import CHECK_NAMES, CONTRACT_REVIEWER_NAME
 
 
 CONCLUSION = """## What changed
@@ -187,7 +188,7 @@ class ReviewGateHooksTest(unittest.TestCase):
         (self.repository / "code.py").write_text("changed\n", encoding="utf-8")
         response = self._stop(stop_hook_active=True)
         self.assertEqual(response.get("decision"), "block")
-        self.assertIn("architecture_reviewer", response["reason"])
+        self.assertIn("service_contract_reviewer", response["reason"])
         self.assertNotIn("continue", response)
 
         # A real review failure remains actionable even in a continued turn.
@@ -249,7 +250,7 @@ class ReviewGateHooksTest(unittest.TestCase):
 
         (self.repository / "code.py").write_text("print('changed')\n", encoding="utf-8")
         response = self._stop()
-        self.assertIn("architecture_reviewer", response.get("reason", ""))
+        self.assertIn("service_contract_reviewer", response.get("reason", ""))
         self.assertNotIn("architecture_scope_classifier", response.get("reason", ""))
 
     def test_documentation_change_routes_to_classifier(self) -> None:
@@ -258,6 +259,110 @@ class ReviewGateHooksTest(unittest.TestCase):
         (self.repository / "guide.md").write_text("documentation\n", encoding="utf-8")
         response = self._stop()
         self.assertIn("architecture_scope_classifier", response.get("reason", ""))
+
+    def test_architecture_pass_alone_cannot_skip_service_contract_stage(self):
+        (self.repository / "service.py").write_text("class ListingService: pass\n")
+        self._agent_stop(REVIEWER_NAME, "early-architecture", "PASS", None)
+        self._conclude(CONCLUSION)
+        response = self._stop()
+        self.assertIn(CONTRACT_REVIEWER_NAME, response["reason"])
+        self.assertNotIn("conclusion_writer", response["reason"])
+
+    def test_pre_specialist_session_stops_without_approval_or_retry_loop(self):
+        state_path = session_state_path(self.repository, self.session_id)
+        state = json.loads(state_path.read_text())
+        del state["baseline"]["service_contract_version"]
+        state_path.write_text(json.dumps(state))
+        (self.repository / "service.py").write_text("class ListingService: pass\n")
+        response = self._stop()
+        self._assert_terminal_stop(response)
+        self.assertIn("predates the service-contract reviewer", response["stopReason"])
+        self.assertIn("existing unapproved change set", response["stopReason"])
+
+    def test_contract_stage_requires_all_checks_and_exact_inventory_coverage(self):
+        (self.repository / "service.py").write_text("class ListingService: pass\n")
+        valid = self._contract_message()
+        for change in ("bare", "missing_check", "wrong_hash", "missing_path", "extra_path"):
+            message = json.loads(json.dumps(valid))
+            if change == "missing_check":
+                del message["checks"]["type_cohesion"]
+            elif change == "wrong_hash":
+                message["inventory_sha256"] = "0" * 64
+            elif change == "missing_path":
+                message["reviewed_paths"] = []
+            elif change == "extra_path":
+                message["reviewed_paths"].append("unrelated.py")
+            with self.subTest(change=change):
+                self._agent_stop(CONTRACT_REVIEWER_NAME, "contract-agent", "PASS" if change == "bare" else json.dumps(message), None)
+                state = load_session_state(self.repository, self.session_id)
+                self.assertIsNone(state.get("service_contract"))
+                self.assertIn(CONTRACT_REVIEWER_NAME, self._stop()["reason"])
+
+    def test_contract_pass_routes_to_architecture_and_changes_revoke_it(self):
+        source = self.repository / "service.py"
+        source.write_text("class ListingService: pass\n")
+        self._contract_pass()
+        response = self._stop()
+        self.assertIn("Spawn a fresh architecture_reviewer", response["reason"])
+        self.assertNotIn("Spawn a fresh service_contract_reviewer", response["reason"])
+        source.write_text("class ChangedService: pass\n")
+        self.assertIn(CONTRACT_REVIEWER_NAME, self._stop()["reason"])
+
+    def test_early_architecture_approval_requires_fresh_review_then_conclusion(self):
+        (self.repository / "service.py").write_text("class ListingService: pass\n")
+        self._agent_stop(REVIEWER_NAME, "architecture-agent", "PASS", None)
+        self._conclude(CONCLUSION)
+        self._contract_pass()
+        self.assertIn("Spawn a fresh architecture_reviewer", self._stop()["reason"])
+        self._agent_stop(REVIEWER_NAME, "fresh-architecture-agent", "PASS", None)
+        self.assertIn("conclusion_writer", self._stop()["reason"])
+        self._conclude(CONCLUSION)
+        self.assertTrue(self._stop().get("continue"))
+
+    def test_transcript_architecture_approval_cannot_predate_specialist(self):
+        (self.repository / "service.py").write_text("class ListingService: pass\n")
+        message = json.dumps(self._contract_message())
+        root = self._write_transcript(self.session_id, CONTRACT_REVIEWER_NAME, message, completed_at="2026-08-18T00:00:03Z")
+        self._write_transcript(self.session_id, REVIEWER_NAME, "PASS", completed_at="2026-08-18T00:00:01Z")
+        response = self._stop(transcript_path=str(root))
+        self.assertIn("predates service-contract approval", response["reason"])
+        self.assertIn("Spawn a fresh architecture_reviewer", response["reason"])
+
+    def test_contract_findings_are_stored_and_block_architecture(self):
+        (self.repository / "service.py").write_text("class ListingService: pass\n")
+        message = self._contract_message()
+        message["verdict"] = "FAIL"
+        message["checks"]["signature_semantics"]["status"] = "fail"
+        message["findings"] = [{
+            "check": "signature_semantics", "severity": "high", "path": "service.py",
+            "symbol": "retrieve_listing", "problem": "The function returns an export instead of a listing",
+            "minimal_correction": "Separate listing retrieval from report export",
+        }]
+        self._agent_stop(CONTRACT_REVIEWER_NAME, "contract-agent", json.dumps(message), None)
+        response = self._stop()
+        self.assertIn("service-contract review returned FAIL", response["reason"])
+        self.assertNotIn("Spawn a fresh architecture_reviewer", response["reason"])
+        state = load_session_state(self.repository, self.session_id)
+        self.assertEqual(json.loads(state["service_contract"]["message"]), message)
+
+    def test_contract_transcript_recovers_only_exact_role_inventory_and_fingerprint(self):
+        source = self.repository / "service.py"
+        source.write_text("class ListingService: pass\n")
+        message = json.dumps(self._contract_message())
+        root = self._write_transcript(self.session_id, CONTRACT_REVIEWER_NAME, message)
+        self.assertIn("Spawn a fresh architecture_reviewer", self._stop(transcript_path=str(root))["reason"])
+        source.write_text("class DifferentService: pass\n")
+        self.assertIn(CONTRACT_REVIEWER_NAME, self._stop(transcript_path=str(root))["reason"])
+        invalid = json.dumps(self._contract_message()).replace('"inventory_sha256": "', '"inventory_sha256": "0')
+        root = self._write_transcript(self.session_id, CONTRACT_REVIEWER_NAME, invalid)
+        self.assertIn(CONTRACT_REVIEWER_NAME, self._stop(transcript_path=str(root))["reason"])
+
+    def test_worker_cannot_submit_contract_evidence(self):
+        (self.repository / "service.py").write_text("class ListingService: pass\n")
+        message = json.dumps(self._contract_message())
+        self._agent_stop("worker", "pretend-reviewer", message, None)
+        state = load_session_state(self.repository, self.session_id)
+        self.assertIsNone(state.get("service_contract"))
 
     def test_classifier_not_required_routes_to_conclusion(self) -> None:
         """A not-required verdict settles review and starts final synthesis."""
@@ -276,6 +381,9 @@ class ReviewGateHooksTest(unittest.TestCase):
         self._classify("ARCHITECTURE_REQUIRED\nreason: The change alters Salesforce metadata.")
         response = self._stop()
         self.assertEqual(response.get("decision"), "block")
+        self.assertIn("service_contract_reviewer", response.get("reason", ""))
+        self._contract_pass()
+        response = self._stop()
         self.assertIn("architecture_reviewer", response.get("reason", ""))
         self.assertIn("Salesforce metadata", response.get("reason", ""))
 
@@ -458,7 +566,7 @@ class ReviewGateHooksTest(unittest.TestCase):
         self.assertTrue(self._stop().get("continue"))
         (self.repository / "code.py").write_text("second\n", encoding="utf-8")
         response = self._stop()
-        self.assertIn("architecture_reviewer", response.get("reason", ""))
+        self.assertIn("service_contract_reviewer", response.get("reason", ""))
         self.assertNotIn("conclusion_writer", response.get("reason", ""))
 
     def test_reviewer_fail_is_stored_and_blocks(self) -> None:
@@ -635,6 +743,8 @@ class ReviewGateHooksTest(unittest.TestCase):
                 self._start(session)
                 path = "guide.md" if role == CLASSIFIER_NAME else "code.py"
                 (self.repository / path).write_text(role + "\n", encoding="utf-8")
+                if role == REVIEWER_NAME:
+                    self._contract_pass(session)
                 root = self._write_transcript(session, role, message, message_format, output_format)
                 response = self._stop(session, transcript_path=str(root))
                 self.assertIn("conclusion_writer", response.get("reason", ""))
@@ -656,6 +766,11 @@ class ReviewGateHooksTest(unittest.TestCase):
         """One Stop may recover ordered review and conclusion transcripts together."""
 
         (self.repository / "code.py").write_text("changed\n", encoding="utf-8")
+        contract_message = json.dumps(self._contract_message())
+        self._write_transcript(
+            self.session_id, CONTRACT_REVIEWER_NAME, contract_message,
+            completed_at="2026-08-18T00:00:01Z",
+        )
         root = self._write_transcript(
             self.session_id, REVIEWER_NAME, "PASS", completed_at="2026-08-18T00:00:03Z",
         )
@@ -731,9 +846,23 @@ class ReviewGateHooksTest(unittest.TestCase):
         self._agent_stop(CLASSIFIER_NAME, "classifier-agent", message, session)
 
     def _review(self, message: str, session: str | None = None) -> None:
-        """Run the dedicated reviewer completion hook."""
+        """Complete the contract prerequisite, then simulate the architecture reviewer."""
 
+        self._contract_pass(session)
         self._agent_stop(REVIEWER_NAME, "reviewer-agent", message, session)
+
+    def _contract_message(self, session: str | None = None) -> dict:
+        self._stop(session)
+        state = load_session_state(self.repository, session or self.session_id)
+        return {
+            "verdict": "PASS", "inventory_sha256": state["delta"]["structure_sha256"],
+            "reviewed_paths": state["delta"]["structure_paths"],
+            "checks": {name: {"status": "not_applicable", "evidence": "The changed test fixture declares no service boundary"} for name in CHECK_NAMES},
+            "findings": [],
+        }
+
+    def _contract_pass(self, session: str | None = None) -> None:
+        self._agent_stop(CONTRACT_REVIEWER_NAME, "contract-agent", json.dumps(self._contract_message(session)), session)
 
     def _conclude(
         self, message: str, session: str | None = None, turn_id: str = "turn-test",
