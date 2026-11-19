@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from review_gate_contracts import CONTRACT_REVIEWER_NAME, parse_contract_review
+
 
 FINGERPRINT_VERSION = 1
 STATE_SCHEMA_VERSION = 2
@@ -39,7 +41,7 @@ _CONCLUSION_HEADERS = (
 _ENGINEERING_SUFFIXES = {
     ".c", ".cc", ".cpp", ".cs", ".css", ".ex", ".exs", ".go", ".h",
     ".hpp", ".html", ".java", ".js", ".jsx", ".kt", ".kts", ".lua",
-    ".php", ".proto", ".py", ".rb", ".rs", ".scala", ".sh", ".sql",
+    ".php", ".proto", ".py", ".pyi", ".rb", ".rs", ".scala", ".sh", ".sql",
     ".svelte", ".swift", ".tsx", ".ts", ".vue",
 }
 _ENGINEERING_NAMES = {
@@ -238,10 +240,10 @@ def session_delta_manifest(state: dict[str, Any], repository: Path) -> list[dict
     # Represent commit-only and remote-identity changes without inventing file paths.
     current_head = _head(repository)
     if current_head != baseline.get("head"):
-        manifest.append({"path": "@HEAD", "status": "modified"})
+        manifest.append({"path": "@HEAD", "status": "modified", "kind": "state"})
     current_remote = canonical_remote(repository)
     if current_remote != baseline.get("canonical_remote"):
-        manifest.append({"path": "@REMOTE", "status": "modified"})
+        manifest.append({"path": "@REMOTE", "status": "modified", "kind": "state"})
     return manifest
 
 
@@ -259,7 +261,7 @@ def manifest_route(manifest: list[dict[str, str]]) -> str:
     # Special state changes require human-readable classification rather than guesses.
     for entry in manifest:
         path = entry["path"]
-        if path.startswith("@"):
+        if entry.get("kind") == "state":
             continue
         lowered = path.lower()
         name = Path(lowered).name
@@ -281,6 +283,7 @@ def new_session_state(
         "session_id": session_id,
         "repository": str(repository.resolve()),
         "baseline": {
+            "service_contract_version": 1,
             "fingerprint": fingerprint,
             "path_state": repository_path_state(repository),
             "head": _head(repository),
@@ -293,6 +296,7 @@ def new_session_state(
         "delta": None,
         "classifier": None,
         "reviewer": None,
+        "service_contract": None,
         "conclusion": None,
     }
     if repository_fingerprint(repository) != fingerprint:
@@ -325,7 +329,19 @@ def record_agent_result(
     """Record one strictly parsed classifier, reviewer, or conclusion result."""
 
     # Parse role-specific output before minting fingerprint-bound evidence.
-    if role == REVIEWER_NAME:
+    if role == CONTRACT_REVIEWER_NAME:
+        parsed = parse_contract_review(final_message)
+        delta = state.get("delta") or {}
+        if (
+            parsed is None or delta.get("fingerprint") != fingerprint
+            or parsed["inventory_sha256"] != delta.get("structure_sha256")
+            or sorted(parsed["reviewed_paths"]) != sorted(delta.get("structure_paths", []))
+        ):
+            state["service_contract"] = None
+            return
+        outcome = parsed["verdict"]
+        reason = None if outcome == "PASS" else final_message
+    elif role == REVIEWER_NAME:
         outcome = "PASS" if is_valid_pass(final_message) else "FAIL"
         reason = None if outcome == "PASS" else final_message
     elif role == CLASSIFIER_NAME:
@@ -349,7 +365,7 @@ def record_agent_result(
         "role": role,
         "outcome": outcome,
         "reason": reason,
-        "message": final_message if role == CONCLUSION_NAME else None,
+        "message": final_message if role in {CONCLUSION_NAME, CONTRACT_REVIEWER_NAME} else None,
         "message_sha256": hashlib.sha256(final_message.encode()).hexdigest(),
         "recorded_at": recorded_at or _utc_now(),
     }
@@ -365,7 +381,17 @@ def current_result(state: dict[str, Any], role: str, fingerprint: str) -> dict[s
     """Return a role result only when it covers the exact current fingerprint."""
 
     result = state.get(_result_key(role))
-    return result if isinstance(result, dict) and result.get("fingerprint") == fingerprint else None
+    if not isinstance(result, dict) or result.get("fingerprint") != fingerprint:
+        return None
+    if role == CONTRACT_REVIEWER_NAME:
+        parsed = parse_contract_review(result.get("message"))
+        delta = state.get("delta") or {}
+        if (
+            parsed is None or parsed["inventory_sha256"] != delta.get("structure_sha256")
+            or sorted(parsed["reviewed_paths"]) != sorted(delta.get("structure_paths", []))
+        ):
+            return None
+    return result
 
 
 def is_valid_pass(message: Any) -> bool:
@@ -421,7 +447,7 @@ def trusted_agent_role(payload: dict[str, Any]) -> str | None:
 
     # Prefer the native custom role when the hook exposes it directly.
     native_role = payload.get("agent_type")
-    if native_role in {CLASSIFIER_NAME, REVIEWER_NAME, CONCLUSION_NAME}:
+    if native_role in {CLASSIFIER_NAME, REVIEWER_NAME, CONTRACT_REVIEWER_NAME, CONCLUSION_NAME}:
         return native_role
 
     # Current Codex may expose a task path, so inspect the child session envelope.
@@ -441,7 +467,7 @@ def trusted_agent_role(payload: dict[str, Any]) -> str | None:
         raise ReviewGateError(f"gate-agent transcript metadata is invalid: {exc}") from exc
     metadata = record.get("payload") if isinstance(record, dict) else None
     role = metadata.get("agent_role") if isinstance(metadata, dict) else None
-    return role if role in {CLASSIFIER_NAME, REVIEWER_NAME, CONCLUSION_NAME} else None
+    return role if role in {CLASSIFIER_NAME, REVIEWER_NAME, CONTRACT_REVIEWER_NAME, CONCLUSION_NAME} else None
 
 
 def _result_key(role: str) -> str:
@@ -451,6 +477,8 @@ def _result_key(role: str) -> str:
         return "classifier"
     if role == REVIEWER_NAME:
         return "reviewer"
+    if role == CONTRACT_REVIEWER_NAME:
+        return "service_contract"
     if role == CONCLUSION_NAME:
         return "conclusion"
     raise ReviewGateError(f"unsupported gate role: {role}")
@@ -549,7 +577,7 @@ def _capture_dirty_baseline(repository: Path, session_id: str) -> dict[str, dict
         material = _path_material(repository, relative_path)
         content = material.pop("content")
         snapshot_path = artifact_directory / f"baseline-{hashlib.sha256(raw_path).hexdigest()}.bin"
-        _atomic_write_bytes(snapshot_path, content)
+        write_protected_bytes(snapshot_path, content)
         material["content_file"] = str(snapshot_path)
         material["content_sha256"] = hashlib.sha256(content).hexdigest()
         snapshots[relative_path] = material
@@ -569,7 +597,7 @@ def _write_session_delta_artifact(
         raise ReviewGateError(
             "session baseline predates exact dirty-path snapshots; start a fresh Codex session"
         )
-    changed_paths = {entry["path"] for entry in manifest if not entry["path"].startswith("@")}
+    changed_paths = {entry["path"] for entry in manifest if entry.get("kind") != "state"}
     exact_paths: list[dict[str, Any]] = []
     expected_directory = _session_artifact_directory(repository, str(state["session_id"])).resolve()
     for relative_path in sorted(changed_paths & set(snapshots)):
@@ -614,7 +642,7 @@ def _write_session_delta_artifact(
         json.dumps(artifact_payload, sort_keys=True, separators=(",", ":")) + "\n"
     ).encode("utf-8")
     artifact_path = expected_directory / "session-delta.json"
-    _atomic_write_bytes(artifact_path, artifact_bytes)
+    write_protected_bytes(artifact_path, artifact_bytes)
     return artifact_path, hashlib.sha256(artifact_bytes).hexdigest()
 
 
@@ -682,7 +710,7 @@ def _session_artifact_directory(repository: Path, session_id: str) -> Path:
     return state_path.parent / f"{state_path.stem}.artifacts"
 
 
-def _atomic_write_bytes(path: Path, content: bytes) -> None:
+def write_protected_bytes(path: Path, content: bytes) -> None:
     """Write one protected artifact atomically without following a final symlink."""
 
     temporary_name: str | None = None
@@ -816,6 +844,7 @@ def _validate_session_state(state: Any, repository: Path, session_id: str) -> No
     for key, role in (
         ("classifier", CLASSIFIER_NAME),
         ("reviewer", REVIEWER_NAME),
+        ("service_contract", CONTRACT_REVIEWER_NAME),
         ("conclusion", CONCLUSION_NAME),
     ):
         result = state.get(key)
@@ -824,6 +853,7 @@ def _validate_session_state(state: Any, repository: Path, session_id: str) -> No
         valid_outcomes = {
             CLASSIFIER_NAME: {"ARCHITECTURE_REQUIRED", "ARCHITECTURE_NOT_REQUIRED"},
             REVIEWER_NAME: {"PASS", "FAIL"},
+            CONTRACT_REVIEWER_NAME: {"PASS", "FAIL"},
             CONCLUSION_NAME: {"READY"},
         }[role]
         if (
@@ -836,6 +866,8 @@ def _validate_session_state(state: Any, repository: Path, session_id: str) -> No
             or not _valid_fingerprint(result.get("message_sha256"))
         ):
             raise ReviewGateError(f"review-gate state has an invalid {key} result")
+        if role == CONTRACT_REVIEWER_NAME and parse_contract_review(result.get("message")) is None:
+            raise ReviewGateError("review-gate state has invalid service-contract evidence")
         if role == CONCLUSION_NAME and not is_valid_conclusion(result.get("message")):
             raise ReviewGateError("review-gate state has an invalid conclusion message")
 

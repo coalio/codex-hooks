@@ -15,8 +15,11 @@ from review_gate_common import (
     is_exempt_repository, load_session_state, manifest_route, record_agent_result,
     repository_fingerprint, read_hook_input, session_delta_artifact, update_delta,
     stop_without_approval, write_hook_output, write_session_state,
+    write_protected_bytes,
 )
+from review_gate_contracts import CONTRACT_REVIEWER_NAME
 from review_gate_evidence import find_gate_evidence
+from review_gate_structure import build_inventory, inventory_bytes
 
 
 _FINGERPRINT_SCRIPT = Path(__file__).with_name("review_gate_fingerprint.py").resolve()
@@ -65,6 +68,32 @@ def _block(payload: dict[str, object], detail: str, instruction: str) -> None:
     write_hook_output({"decision": "block", "reason": prefix + detail + " " + instruction})
 
 
+def contract_review_instruction(state: dict[str, object]) -> str:
+    """Require the independent contract specialist before general architecture approval."""
+    delta = state["delta"]
+    context = {
+        "manifest": delta["manifest"],
+        "session_delta_artifact": delta["session_delta_artifact"],
+        "session_delta_sha256": delta["session_delta_sha256"],
+        "structure_inventory": delta["structure_inventory"],
+        "structure_sha256": delta["structure_sha256"],
+        "fingerprint": delta["fingerprint"],
+    }
+    return (
+        "Spawn a fresh service_contract_reviewer with fork_turns=none. Pass only a compact "
+        "original-request summary and this machine context: "
+        + json.dumps(context, sort_keys=True, separators=(",", ":"))
+        + ". The reviewer must verify both artifact hashes and inspect every inventoried path, "
+        "new folder, changed signature and type, then trace implementations and relevant callers. "
+        "It must explicitly validate service_justification, responsibility, signature_semantics, "
+        "type_cohesion and domain_generality in its strict JSON result. Extraction gaps require "
+        "manual inspection, not automatic approval. Wait for its result; fix actionable findings "
+        "and rerun validation, then attempt to finish so Stop refreshes the handoff. Never reuse "
+        "this handoff after an edit. Immediately before responding the reviewer must run "
+        + _FINGERPRINT_COMMAND + ". No repository edits or external publication are permitted."
+    )
+
+
 def _conclusion_instruction(
     state: dict[str, object], manifest: list[dict[str, str]], approval: dict[str, object] | None,
 ) -> str:
@@ -82,6 +111,7 @@ def _conclusion_instruction(
         "approval_role": approval.get("role") if approval else "remote_exemption",
         "approval_outcome": approval.get("outcome") if approval else "EXEMPT",
         "approval_reason": approval.get("reason") if approval else None,
+        "service_contract_review": state.get("service_contract"),
     }
     return (
         "Spawn a fresh conclusion_writer with fork_turns=none. Pass this machine context: "
@@ -106,16 +136,21 @@ def _conclusion_follows_approval(
         return False
     if approval is None:
         return True
-    conclusion_time = conclusion.get("recorded_at")
-    approval_time = approval.get("recorded_at")
-    if not isinstance(conclusion_time, str) or not isinstance(approval_time, str):
+    return result_follows(conclusion, approval)
+
+
+def result_follows(later: dict[str, object], earlier: dict[str, object]) -> bool:
+    """Require independent stages to complete in the declared order."""
+    later_time = later.get("recorded_at")
+    earlier_time = earlier.get("recorded_at")
+    if not isinstance(later_time, str) or not isinstance(earlier_time, str):
         return False
     try:
-        conclusion_timestamp = datetime.fromisoformat(conclusion_time.replace("Z", "+00:00"))
-        approval_timestamp = datetime.fromisoformat(approval_time.replace("Z", "+00:00"))
-        if conclusion_timestamp.tzinfo is None or approval_timestamp.tzinfo is None:
+        later_timestamp = datetime.fromisoformat(later_time.replace("Z", "+00:00"))
+        earlier_timestamp = datetime.fromisoformat(earlier_time.replace("Z", "+00:00"))
+        if later_timestamp.tzinfo is None or earlier_timestamp.tzinfo is None:
             return False
-        return conclusion_timestamp > approval_timestamp
+        return later_timestamp > earlier_timestamp
     except (TypeError, ValueError):
         return False
 
@@ -153,6 +188,13 @@ def main() -> None:
 
     # The exact Salesforce remote skips architecture models but still receives a conclusion.
     exempt_repository = is_exempt_repository(state, repository)
+    if not exempt_repository and baseline.get("service_contract_version") != 1:
+        # Existing runtimes may not know the newly installed custom agent role.
+        stop_without_approval(
+            "This session predates the service-contract reviewer, a fresh session must load "
+            "the new role and explicitly review the existing unapproved change set.",
+        )
+        return
 
     # Recover Codex 0.147 natural-completion evidence for every trusted role.
     evidence = find_gate_evidence(
@@ -184,6 +226,17 @@ def main() -> None:
 
     # Persist an exact compact delta before making or explaining the route.
     manifest = update_delta(state, repository, fingerprint)
+    if not exempt_repository:
+        # The same protected inventory is consumed by the specialist and result validator.
+        inventory = build_inventory(state, repository)
+        content = inventory_bytes(inventory)
+        inventory_path = Path(state["delta"]["session_delta_artifact"]).with_name("structure-inventory.json")
+        write_protected_bytes(inventory_path, content)
+        state["delta"].update(
+            structure_inventory=str(inventory_path),
+            structure_sha256=hashlib.sha256(content).hexdigest(),
+            structure_paths=[entry["path"] for entry in inventory["files"]],
+        )
     write_session_state(repository, session_id, state)
     artifact = session_delta_artifact(state)
     if artifact is None:
@@ -194,9 +247,28 @@ def main() -> None:
 
     # Resolve the architecture decision before allowing conclusion generation.
     approval: dict[str, object] | None = None
+    contract_approval: dict[str, object] | None = None
     if not exempt_repository:
         reviewer = current_result(state, REVIEWER_NAME, fingerprint)
+        classifier = current_result(state, CLASSIFIER_NAME, fingerprint)
+        engineering_review = (
+            manifest_route(manifest) == REVIEWER_NAME or reviewer is not None
+            or classifier is not None and classifier.get("outcome") == "ARCHITECTURE_REQUIRED"
+        )
+        if engineering_review:
+            contract = current_result(state, CONTRACT_REVIEWER_NAME, fingerprint)
+            if contract is None or contract.get("outcome") != "PASS":
+                detail = "The current service-contract review returned FAIL." if contract else "The current fingerprint needs independent service-contract review."
+                _block(payload, detail, contract_review_instruction(state))
+                return
+            contract_approval = contract
         if reviewer is not None and reviewer.get("outcome") == "PASS":
+            if contract_approval is not None and not result_follows(reviewer, contract_approval):
+                _block(
+                    payload, "The architecture approval predates service-contract approval.",
+                    _agent_instruction(REVIEWER_NAME, manifest, artifact, artifact_sha256),
+                )
+                return
             approval = reviewer
         elif reviewer is not None and reviewer.get("outcome") == "FAIL":
             _block(
@@ -233,6 +305,8 @@ def main() -> None:
     conclusion = current_result(state, CONCLUSION_NAME, fingerprint)
     if conclusion is not None and _conclusion_follows_approval(
         conclusion, approval, payload.get("turn_id"),
+    ) and _conclusion_follows_approval(
+        conclusion, contract_approval, payload.get("turn_id"),
     ):
         write_hook_output({"continue": True})
         return
@@ -246,5 +320,5 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except ReviewGateError as exc:
+    except (ReviewGateError, OSError, ValueError) as exc:
         stop_without_approval(f"Gate state is unreadable or inconsistent: {exc}.")

@@ -4,9 +4,13 @@ set -eu
 force=false
 case "${1:-}" in
   "") ;;
+  --usage-only)
+    repository_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+    exec /usr/bin/python3 "$repository_root/tools/usage/install.py"
+    ;;
   --force) force=true ;;
   *)
-    echo "usage: $0 [--force]" >&2
+    echo "usage: $0 [--force|--usage-only]" >&2
     exit 2
     ;;
 esac
@@ -20,15 +24,18 @@ files='
 AGENTS.md
 hooks.json
 agents/architecture-reviewer.toml
+agents/service-contract-reviewer.toml
 agents/architecture-scope-classifier.toml
 agents/conclusion-writer.toml
 hooks/architecture_review_stop.py
 hooks/review_gate_common.py
+hooks/review_gate_contracts.py
 hooks/review_gate_evidence.py
 hooks/review_gate_fingerprint.py
 hooks/review_gate_session_start.py
 hooks/review_gate_stop.py
 hooks/review_gate_subagent_stop.py
+hooks/review_gate_structure.py
 '
 
 # Refuse before mutation when an existing installation would be overwritten implicitly.
@@ -54,6 +61,9 @@ for relative_path in $conflicts; do
   mkdir -p "$(dirname -- "$backup_path")"
   cp -p "$target_path" "$backup_path"
 done
+
+# Prepare the usage runtime before publishing lifecycle handlers that depend on it.
+/usr/bin/python3 "$repository_root/tools/usage/install.py"
 
 # Install the complete gate while leaving all unrelated Codex files untouched.
 for relative_path in $files; do

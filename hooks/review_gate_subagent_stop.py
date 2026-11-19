@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Record trusted classifier, reviewer, and conclusion outcomes."""
 
+from review_gate_contracts import CONTRACT_REVIEWER_NAME, parse_contract_review
+
 from review_gate_common import (
     CLASSIFIER_NAME, CONCLUSION_NAME, REVIEWER_NAME, ReviewGateError,
     clear_agent_result, hook_repository, hook_session_id, is_valid_conclusion,
@@ -17,7 +19,7 @@ def main() -> None:
     # Ignore ordinary subagents because this hook observes every stopped agent.
     payload = read_hook_input("SubagentStop")
     role = trusted_agent_role(payload)
-    if role not in {CLASSIFIER_NAME, REVIEWER_NAME, CONCLUSION_NAME}:
+    if role not in {CLASSIFIER_NAME, REVIEWER_NAME, CONTRACT_REVIEWER_NAME, CONCLUSION_NAME}:
         write_hook_output({"continue": True})
         return
     repository = hook_repository(payload)
@@ -32,7 +34,9 @@ def main() -> None:
         raise ReviewGateError("session baseline is missing")
     message = payload.get("last_assistant_message")
     agent_id = str(payload.get("agent_id") or "")
-    if role == REVIEWER_NAME:
+    if role == CONTRACT_REVIEWER_NAME:
+        valid = parse_contract_review(message) is not None
+    elif role == REVIEWER_NAME:
         valid = is_valid_review_result(message)
     elif role == CLASSIFIER_NAME:
         valid = parse_classifier_result(message) is not None

@@ -35,9 +35,20 @@
             "command": "/usr/bin/python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/review_gate_stop.py\"",
             "statusMessage": "Routing review and final conclusion",
             "timeout": 120
+          },
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/usage_lifecycle.py\"",
+            "timeout": 3
           }
         ]
       }
+    ],
+    "Interrupt": [
+      {"hooks": [{"type": "command", "command": "/usr/bin/python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/usage_lifecycle.py\"", "timeout": 3}]}
+    ],
+    "SessionEnd": [
+      {"hooks": [{"type": "command", "command": "/usr/bin/python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/usage_lifecycle.py\"", "timeout": 3}]}
     ]
   }
 }
