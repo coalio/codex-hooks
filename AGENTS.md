@@ -49,3 +49,52 @@ All three custom agents are read-only. The architecture reviewer may publish rev
 comments only when the user explicitly requests that external write and identifies
 the exact open pull request; that exception never permits repository edits or other PR
 changes. The classifier and conclusion writer never publish anything.
+
+
+## Responsibility ownership and service structure
+
+Organize shared code around stable domains, integration providers, and cohesive
+capabilities. Choose the broadest accurate owner while keeping each service focused
+on one responsibility; maximum generality and file size are not design goals.
+
+Before adding or extending a service, inspect its existing owner and neighboring
+capabilities, including relevant services introduced by earlier changes. Use one
+service while the responsibility remains cohesive. When distinct capabilities need
+independent services, group them within a common domain or provider namespace and
+name each service for the capability it owns. Do not leave a broad owner service
+beside independently implemented feature or subdomain services for that same owner
+at the shared layer. Consolidate the implementations or establish the common
+namespace and give its peers explicit responsibilities. A public facade may expose
+the whole owner's contract by delegating to services within that namespace.
+
+A provider namespace groups integration implementations; it does not imply one
+business domain, one shared model, or one deployable service. Keep workflow-specific
+decisions and orchestration with their owning feature layers, reusable domain rules
+with their domain owner, and provider transport/authentication with the integration
+boundary. Preserve the repository's documented layer contracts.
+
+Apply the same principle to configuration and CI: shared quality checks express
+repository policy, with scope selected through shared configuration or discovery.
+Do not create permanent feature-named quality gates or allowlists as each feature
+arrives. Preserve existing strictness and checked coverage when consolidating them;
+an incremental rollout needs an explicit migration scope and completion condition.
+
+A rename or folder move is insufficient if overlapping responsibilities, duplicated
+implementation, or feature-coupled contracts remain. Review actual imports, public
+contracts, consumers, and reasons to change. One consumer can justify a well-defined
+owner; hypothetical reuse does not justify speculative abstraction. Report concrete
+ownership violations in the affected boundary without demanding unrelated cleanup.
+
+These repository conventions apply the following Microsoft guidance. The sources
+support the principles; they do not prescribe our exact names, folders, or CI layout.
+Microservice boundary reasoning is adapted to in-process components without requiring
+distributed deployment.
+
+- Architectural principles: separation of concerns, encapsulation, and single responsibility.
+  https://learn.microsoft.com/en-us/dotnet/architecture/modern-web-apps-azure/architectural-principles
+- Design for evolution: high cohesion, loose coupling, and separation of domain logic from infrastructure.
+  https://learn.microsoft.com/en-us/azure/architecture/guide/design-principles/design-for-evolution
+- Identify microservice boundaries: domain-led boundaries and pragmatic, initially coarse granularity.
+  https://learn.microsoft.com/en-us/azure/architecture/microservices/model/microservice-boundaries
+- Use domain analysis to model microservices: business capabilities, bounded contexts, and explicit external integrations.
+  https://learn.microsoft.com/en-us/azure/architecture/microservices/model/domain-analysis

@@ -82,6 +82,22 @@ def write_hook_output(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
 
 
+def stop_without_approval(detail: str) -> None:
+    """End an unrecoverable Stop hook without creating approval or another turn."""
+
+    # Missing baseline evidence cannot be recovered by asking the same agent to retry.
+    message = (
+        f"Review gate stopped without approval: {detail} "
+        "This turn will not be retried automatically. Start a fresh Codex session "
+        "after resolving any gate-state errors; existing changes still require review."
+    )
+    write_hook_output({
+        "continue": False,
+        "stopReason": message,
+        "systemMessage": message,
+    })
+
+
 def discover_repository(cwd: str | os.PathLike[str]) -> Path | None:
     """Return the containing Git worktree root, or None outside a worktree."""
 

@@ -14,7 +14,7 @@ from review_gate_common import (
     baseline_matches, current_result, hook_repository, hook_session_id,
     is_exempt_repository, load_session_state, manifest_route, record_agent_result,
     repository_fingerprint, read_hook_input, session_delta_artifact, update_delta,
-    write_hook_output, write_session_state,
+    stop_without_approval, write_hook_output, write_session_state,
 )
 from review_gate_evidence import find_gate_evidence
 
@@ -130,15 +130,11 @@ def main() -> None:
         write_hook_output({"continue": True})
         return
 
-    # Missing or corrupt state cannot silently approve a changed repository.
+    # A missing baseline needs a new session, so a continuation cannot repair it.
     session_id = hook_session_id(payload)
     state = load_session_state(repository, session_id)
     if state is None:
-        _block(
-            payload,
-            "The session baseline is missing.",
-            "Start a fresh Codex session so the global SessionStart hook can initialize the review gate.",
-        )
+        stop_without_approval("The session baseline is missing.")
         return
     fingerprint = repository_fingerprint(repository)
 
@@ -150,10 +146,8 @@ def main() -> None:
     # Older baselines cannot reconstruct session-only hunks in pre-existing dirty files.
     baseline = state.get("baseline")
     if not isinstance(baseline, dict) or not isinstance(baseline.get("dirty_snapshots"), dict):
-        _block(
-            payload,
+        stop_without_approval(
             "The session baseline predates exact dirty-path delta capture.",
-            "Start a fresh Codex session before completing changed repository work.",
         )
         return
 
@@ -253,7 +247,4 @@ if __name__ == "__main__":
     try:
         main()
     except ReviewGateError as exc:
-        write_hook_output({
-            "decision": "block",
-            "reason": f"Review-gate enforcement failed closed because state is unreadable or inconsistent: {exc}. Start a fresh Codex session after correcting the gate configuration.",
-        })
+        stop_without_approval(f"Gate state is unreadable or inconsistent: {exc}.")

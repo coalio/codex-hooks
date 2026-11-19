@@ -7,6 +7,7 @@ A global, context-aware review gate for Codex. It fingerprints the exact Git sta
 ```text
 SessionStart -> record immutable repository baseline
      Stop -> unchanged or outside Git ----------------------> finish
+          -> missing or unusable baseline ------------------> stop with warning, review incomplete
           -> exact Salesforce remote exemption -------------> conclusion_writer -> finish
           -> obvious engineering change -> architecture_reviewer -> conclusion_writer -> finish
           -> ambiguous/non-engineering change -> architecture_scope_classifier
@@ -17,6 +18,17 @@ SessionStart -> record immutable repository baseline
 The fingerprint covers HEAD, the index, tracked worktree changes, non-ignored untracked files, and initialized submodules. For files already dirty when a session starts, the gate stores protected baseline material under the worktree's Git directory and generates a session-only delta artifact so reviewers do not attribute earlier work to the current session.
 
 `SubagentStop` records only strict outputs from the three configured roles. `Stop` also has transcript-evidence recovery for compatible Codex child rollouts. Any edit after classification, review, or conclusion changes the fingerprint and invalidates that evidence.
+
+When the baseline is missing, too old to reconstruct the changed files, or
+unreadable, the hook ends the turn with a visible warning and leaves review
+incomplete. The same behavior applies when protected baseline content is lost or
+a legacy Stop command has no trustworthy baseline. Existing evidence stays intact,
+and a fresh session is needed after any state errors are corrected, with existing
+changes still requiring review.
+
+These failures use `continue: false`, `stopReason`, and `systemMessage`, following
+the [Codex Stop hook contract](https://learn.chatgpt.com/docs/hooks#stop).
+Actionable review and conclusion requests continue to use `decision: "block"`.
 
 ## Included files
 
@@ -79,6 +91,21 @@ Validate the configuration formats:
 ```
 
 ## Policy notes
+
+The global guidance and reviewer profile enforce responsibility ownership as an
+architectural requirement. Keep one cohesive service for an owner, or group its
+independent capabilities under a common domain or provider namespace. A broad owner
+service alongside independently implemented feature services for that owner fails
+this rule. Review contracts and dependencies as well as names, including relevant
+existing siblings. Apply the same ownership rule to shared CI quality checks while
+preserving their coverage and strictness.
+
+The policy cites Microsoft's Architectural principles, Design for evolution,
+Identify microservice boundaries, and Use domain analysis to model microservices.
+The global guidance and reviewer profile include all four reference links and their
+applicable principles. Provider namespaces and shared CI configuration are local
+conventions derived from that guidance, not folder layouts prescribed by Microsoft.
+The reviewer receives the reference summaries directly and remains read-only.
 
 The installed policy deterministically exempts only the repository whose initial and current normalized canonical remote is `github.com/GreysteelCompany/salesforce`. Work outside Git and sessions with no net repository change also skip model review. Change `EXEMPT_REMOTE` in `hooks/review_gate_common.py` and the matching language in `AGENTS.md` and the classifier profile only if you intentionally want a different exemption.
 
